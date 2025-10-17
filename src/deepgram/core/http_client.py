@@ -162,13 +162,13 @@ class HttpClient:
         self.httpx_client = httpx_client
 
     def get_base_url(self, maybe_base_url: typing.Optional[str]) -> str:
-        base_url = maybe_base_url
-        if self.base_url is not None and base_url is None:
+        if maybe_base_url is not None:
+            return maybe_base_url
+        if self.base_url is not None:
             base_url = self.base_url()
-
-        if base_url is None:
-            raise ValueError("A base_url is required to make this request, please provide one and try again.")
-        return base_url
+            if base_url is not None:
+                return base_url
+        raise ValueError("A base_url is required to make this request, please provide one and try again.")
 
     def request(
         self,
