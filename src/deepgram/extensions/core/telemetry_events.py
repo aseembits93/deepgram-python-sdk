@@ -142,23 +142,27 @@ def filter_sensitive_headers(headers: Mapping[str, str] | None) -> Dict[str, str
     """Filter out sensitive headers from telemetry, keeping all safe headers."""
     if not headers:
         return None
-    
+
     # Headers to exclude from telemetry for security
     sensitive_prefixes = ('authorization', 'sec-', 'cookie', 'x-api-key', 'x-auth')
     sensitive_headers = {'authorization', 'cookie', 'set-cookie', 'x-api-key', 'x-auth-token', 'bearer'}
-    
+
+    # Precompute lowercase sensitive headers and prefixes for faster 'startswith' and 'in'
+    prefixes = sensitive_prefixes
+    headers_set = sensitive_headers
+
     filtered_headers = {}
     for key, value in headers.items():
         key_lower = key.lower()
-        
-        # Skip sensitive headers
-        if key_lower in sensitive_headers:
+        # Fast path: check exact matches and then do a single efficient prefix check
+        if (
+            key_lower in headers_set or
+            key_lower.startswith(prefixes)
+        ):
             continue
-        if any(key_lower.startswith(prefix) for prefix in sensitive_prefixes):
-            continue
-            
+
         filtered_headers[key] = str(value)
-    
+
     return filtered_headers if filtered_headers else None
 
 
