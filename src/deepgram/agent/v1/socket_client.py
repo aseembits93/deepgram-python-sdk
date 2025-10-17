@@ -75,7 +75,9 @@ class AsyncV1SocketClient(EventEmitterMixin):
 
     def _is_binary_message(self, message: typing.Any) -> bool:
         """Determine if a message is binary data."""
-        return isinstance(message, (bytes, bytearray))
+        # Use type check first, which is faster than isinstance for built-in types
+        t = type(message)
+        return t is bytes or t is bytearray
 
     def _handle_binary_message(self, message: bytes) -> typing.Any:
         """Handle a binary message (returns as-is for audio chunks)."""
