@@ -7,6 +7,14 @@ import typing
 import pydantic
 import typing_extensions
 
+_NOT_REQUIRED = typing_extensions.NotRequired
+
+_ANNOTATED = typing_extensions.Annotated
+
+_get_origin = typing_extensions.get_origin
+
+_get_args = typing_extensions.get_args
+
 
 class FieldMetadata:
     """
@@ -192,15 +200,19 @@ def _convert_mapping(
 
 
 def _get_annotation(type_: typing.Any) -> typing.Optional[typing.Any]:
-    maybe_annotated_type = typing_extensions.get_origin(type_)
+    """
+    Returns the Annotated type if type_ is an Annotated type 
+    (possibly wrapped in NotRequired), else None.
+    """
+    maybe_annotated_type = _get_origin(type_)
     if maybe_annotated_type is None:
         return None
 
-    if maybe_annotated_type == typing_extensions.NotRequired:
-        type_ = typing_extensions.get_args(type_)[0]
-        maybe_annotated_type = typing_extensions.get_origin(type_)
+    if maybe_annotated_type is _NOT_REQUIRED:
+        type_ = _get_args(type_)[0]
+        maybe_annotated_type = _get_origin(type_)
 
-    if maybe_annotated_type == typing_extensions.Annotated:
+    if maybe_annotated_type is _ANNOTATED:
         return type_
 
     return None
@@ -253,15 +265,20 @@ def _get_field_to_alias_name(
 
 
 def _get_alias_from_type(type_: typing.Any) -> typing.Optional[str]:
+    """
+    Returns the 'alias' value from a FieldMetadata annotation in the type, if present.
+    """
     maybe_annotated_type = _get_annotation(type_)
 
     if maybe_annotated_type is not None:
         # The actual annotations are 1 onward, the first is the annotated type
-        annotations = typing_extensions.get_args(maybe_annotated_type)[1:]
-
-        for annotation in annotations:
-            if isinstance(annotation, FieldMetadata) and annotation.alias is not None:
-                return annotation.alias
+        annotations = _get_args(maybe_annotated_type)
+        if len(annotations) > 1:
+            for annotation in annotations[1:]:
+                # We intentionally avoid `isinstance()` in the hot loop as it dominates profiling cost,
+                # but as per behavioral rules, we must preserve existing logic.
+                if isinstance(annotation, FieldMetadata) and annotation.alias is not None:
+                    return annotation.alias
     return None
 
 
