@@ -10,7 +10,6 @@ Adds support for `access_token` alongside `api_key` with the following rules:
 import os
 import platform
 import sys
-import types
 import uuid
 from typing import Any, Dict, Optional
 
@@ -173,13 +172,13 @@ def _apply_bearer_authorization_override(client_wrapper: BaseClientWrapper, bear
     """
     original_get_headers = client_wrapper.get_headers
 
-    def _get_headers_with_bearer(_self: Any) -> Dict[str, str]:
+    def _get_headers_with_bearer() -> Dict[str, str]:
         headers = original_get_headers()
         headers["Authorization"] = f"bearer {bearer_token}"
         return headers
 
     # Override on wrapper for WebSockets
-    client_wrapper.get_headers = types.MethodType(_get_headers_with_bearer, client_wrapper)  # type: ignore[method-assign]
+    client_wrapper.get_headers = _get_headers_with_bearer  # type: ignore[method-assign]
 
     # Override on HTTP client for REST requests
     if hasattr(client_wrapper, "httpx_client") and hasattr(client_wrapper.httpx_client, "base_headers"):
