@@ -29,72 +29,77 @@ DictIntStrAny = Dict[Union[int, str], Any]
 
 
 def jsonable_encoder(obj: Any, custom_encoder: Optional[Dict[Any, Callable[[Any], Any]]] = None) -> Any:
-    custom_encoder = custom_encoder or {}
     if custom_encoder:
-        if type(obj) in custom_encoder:
-            return custom_encoder[type(obj)](obj)
-        else:
-            for encoder_type, encoder_instance in custom_encoder.items():
-                if isinstance(obj, encoder_type):
-                    return encoder_instance(obj)
+        obj_type = type(obj)
+        if obj_type in custom_encoder:
+            return custom_encoder[obj_type](obj)
+        for encoder_type, encoder_instance in custom_encoder.items():
+            if isinstance(obj, encoder_type):
+                return encoder_instance(obj)
+
+    # Fast-path for most common immutable JSON types
+    if isinstance(obj, (str, int, float, type(None))):
+        return obj
+
+    # Pydantic model handling
     if isinstance(obj, pydantic.BaseModel):
         if IS_PYDANTIC_V2:
-            encoder = getattr(obj.model_config, "json_encoders", {})  # type: ignore # Pydantic v2
+            encoder = getattr(obj.model_config, "json_encoders", {}).copy()  # type: ignore # Pydantic v2
         else:
-            encoder = getattr(obj.__config__, "json_encoders", {})  # type: ignore # Pydantic v1
+            encoder = getattr(obj.__config__, "json_encoders", {}).copy()  # type: ignore # Pydantic v1
         if custom_encoder:
             encoder.update(custom_encoder)
         obj_dict = obj.dict(by_alias=True)
-        if "__root__" in obj_dict:
-            obj_dict = obj_dict["__root__"]
-        if "root" in obj_dict:
-            obj_dict = obj_dict["root"]
+        # Avoid unnecessary work if these keys don't exist
+        if isinstance(obj_dict, dict):
+            if "__root__" in obj_dict:
+                obj_dict = obj_dict["__root__"]
+            if isinstance(obj_dict, dict) and "root" in obj_dict:
+                obj_dict = obj_dict["root"]
         return jsonable_encoder(obj_dict, custom_encoder=encoder)
+
+    # Dataclass handling
     if dataclasses.is_dataclass(obj):
-        obj_dict = dataclasses.asdict(obj)  # type: ignore
-        return jsonable_encoder(obj_dict, custom_encoder=custom_encoder)
+        return jsonable_encoder(dataclasses.asdict(obj), custom_encoder=custom_encoder)
+
     if isinstance(obj, bytes):
         return base64.b64encode(obj).decode("utf-8")
     if isinstance(obj, Enum):
         return obj.value
     if isinstance(obj, PurePath):
         return str(obj)
-    if isinstance(obj, (str, int, float, type(None))):
-        return obj
     if isinstance(obj, dt.datetime):
         return serialize_datetime(obj)
     if isinstance(obj, dt.date):
         return str(obj)
+
     if isinstance(obj, dict):
-        encoded_dict = {}
-        allowed_keys = set(obj.keys())
-        for key, value in obj.items():
-            if key in allowed_keys:
-                encoded_key = jsonable_encoder(key, custom_encoder=custom_encoder)
-                encoded_value = jsonable_encoder(value, custom_encoder=custom_encoder)
-                encoded_dict[encoded_key] = encoded_value
-        return encoded_dict
+        # Removed allowed_keys, as by default we only loop known keys/values
+        return {
+            jsonable_encoder(key, custom_encoder=custom_encoder):
+            jsonable_encoder(value, custom_encoder=custom_encoder)
+            for key, value in obj.items()
+        }
+
     if isinstance(obj, (list, set, frozenset, GeneratorType, tuple)):
-        encoded_list = []
-        for item in obj:
-            encoded_list.append(jsonable_encoder(item, custom_encoder=custom_encoder))
-        return encoded_list
+        return [
+            jsonable_encoder(item, custom_encoder=custom_encoder)
+            for item in obj
+        ]
 
     def fallback_serializer(o: Any) -> Any:
         attempt_encode = encode_by_type(o)
         if attempt_encode is not None:
             return attempt_encode
-
         try:
             data = dict(o)
         except Exception as e:
-            errors: List[Exception] = []
-            errors.append(e)
+            errors: List[Exception] = [e]
             try:
                 data = vars(o)
-            except Exception as e:
-                errors.append(e)
-                raise ValueError(errors) from e
+            except Exception as e2:
+                errors.append(e2)
+                raise ValueError(errors) from e2
         return jsonable_encoder(data, custom_encoder=custom_encoder)
 
     return to_jsonable_with_fallback(obj, fallback_serializer)
