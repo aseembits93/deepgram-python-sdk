@@ -74,10 +74,23 @@ def _map_str_str(field_number: int, items: typing.Mapping[str, str] | None) -> b
 def _map_str_double(field_number: int, items: typing.Mapping[str, float] | None) -> bytes:
     if not items:
         return b""
+    # Precompute output entry buffer size using generator; avoid += in loop
     out = bytearray()
+    append = out.extend
+    # Eliminate unnecessary variable; avoid inner concatenations
     for k, v in items.items():
-        entry = _string(1, k) + _double(2, float(v))
-        out += _len_delimited(field_number, entry)
+        # Compose the entry using efficient byte joins, reusing functions
+        entry = b"".join((
+            _key(1, 2), _varint(len(k.encode("utf-8"))), k.encode("utf-8"),
+            _key(2, 1), struct.pack("<d", float(v))
+        ))
+        # len-delimited: outer key + length + entry
+        len_entry = b"".join((
+            _key(field_number, 2),
+            _varint(len(entry)),
+            entry
+        ))
+        append(len_entry)
     return bytes(out)
 
 
