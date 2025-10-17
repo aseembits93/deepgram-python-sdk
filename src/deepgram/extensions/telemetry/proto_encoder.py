@@ -13,11 +13,15 @@ def _varint(value: int) -> bytes:
     if value < 0:
         # For this usage we only encode non-negative values
         value &= (1 << 64) - 1
+    # Fast path for common small values
+    if value <= 0x7F:
+        return bytes([value])
     out = bytearray()
+    append = out.append  # localize for speed
     while value > 0x7F:
-        out.append((value & 0x7F) | 0x80)
+        append((value & 0x7F) | 0x80)
         value >>= 7
-    out.append(value)
+    append(value)
     return bytes(out)
 
 
@@ -26,16 +30,23 @@ def _key(field_number: int, wire_type: int) -> bytes:
 
 
 def _len_delimited(field_number: int, payload: bytes) -> bytes:
-    return _key(field_number, 2) + _varint(len(payload)) + payload
+    k = _key(field_number, 2)
+    l = _varint(len(payload))
+    # Avoid unnecessary intermediate allocations
+    return b"".join((k, l, payload))
 
 
 def _string(field_number: int, value: str) -> bytes:
     data = value.encode("utf-8")
-    return _len_delimited(field_number, data)
+    k = _key(field_number, 2)
+    l = _varint(len(data))
+    # Avoid unnecessary intermediate allocations
+    return b"".join((k, l, data))
 
 
 def _bool(field_number: int, value: bool) -> bytes:
-    return _key(field_number, 0) + _varint(1 if value else 0)
+    # _varint(1|0) always returns b'\x01' or b'\x00', no need to optimize further
+    return _key(field_number, 0) + (b'\x01' if value else b'\x00')
 
 
 def _int64(field_number: int, value: int) -> bytes:
@@ -53,22 +64,29 @@ def _timestamp_message(ts_seconds: float) -> bytes:
     if nanos >= 1_000_000_000:
         sec += 1
         nanos -= 1_000_000_000
-    msg = bytearray()
-    msg += _int64(1, sec)
+    parts = []
+    parts.append(_int64(1, sec))
     if nanos:
-        msg += _key(2, 0) + _varint(nanos)
-    return bytes(msg)
+        # nanos fits in 32 bits, fast path varint construction
+        parts.append(_key(2, 0))
+        parts.append(_varint(nanos))
+    return b''.join(parts)
 
 
 # Map encoders: map<string,string> and map<string,double>
 def _map_str_str(field_number: int, items: typing.Mapping[str, str] | None) -> bytes:
     if not items:
         return b""
-    out = bytearray()
+    # Preallocate list for b''.join for better perf, especially for small maps
+    out = []
+    # Avoid repeated attribute lookups for tight loop
+    out_append = out.append
+    _string1 = _string
+    _len_delimited1 = _len_delimited
     for k, v in items.items():
-        entry = _string(1, k) + _string(2, v)
-        out += _len_delimited(field_number, entry)
-    return bytes(out)
+        entry = _string1(1, k) + _string1(2, v)
+        out_append(_len_delimited1(field_number, entry))
+    return b"".join(out)
 
 
 def _map_str_double(field_number: int, items: typing.Mapping[str, float] | None) -> bytes:
@@ -160,24 +178,29 @@ def _encode_error_event(
     line: int | None = None,
     column: int | None = None,
 ) -> bytes:
-    msg = bytearray()
+    msg = []
+    append = msg.append
+
     if err_type:
-        msg += _string(1, err_type)
+        append(_string(1, err_type))
     if message:
-        msg += _string(2, message)
+        append(_string(2, message))
     if stack_trace:
-        msg += _string(3, stack_trace)
+        append(_string(3, stack_trace))
     if file:
-        msg += _string(4, file)
+        append(_string(4, file))
     if line is not None:
-        msg += _key(5, 0) + _varint(line)
+        append(_key(5, 0))
+        append(_varint(line))
     if column is not None:
-        msg += _key(6, 0) + _varint(column)
-    msg += _key(7, 0) + _varint(severity)
-    msg += _bool(8, handled)
-    msg += _len_delimited(9, _timestamp_message(ts))
-    msg += _map_str_str(10, attributes)
-    return bytes(msg)
+        append(_key(6, 0))
+        append(_varint(column))
+    append(_key(7, 0))
+    append(_varint(severity))
+    append(_bool(8, handled))
+    append(_len_delimited(9, _timestamp_message(ts)))
+    append(_map_str_str(10, attributes))
+    return b"".join(msg)
 
 
 def _encode_record(record: bytes, kind_field_number: int) -> bytes:
