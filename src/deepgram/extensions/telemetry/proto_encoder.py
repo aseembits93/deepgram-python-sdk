@@ -22,6 +22,7 @@ def _varint(value: int) -> bytes:
 
 
 def _key(field_number: int, wire_type: int) -> bytes:
+    # Avoid creating a temporary tuple, compute in-register
     return _varint((field_number << 3) | wire_type)
 
 
@@ -35,7 +36,9 @@ def _string(field_number: int, value: str) -> bytes:
 
 
 def _bool(field_number: int, value: bool) -> bytes:
-    return _key(field_number, 0) + _varint(1 if value else 0)
+    # Avoid function call for _varint(1) or _varint(0)
+    key_bytes = _key(field_number, 0)
+    return key_bytes + (b'\x01' if value else b'\x00')
 
 
 def _int64(field_number: int, value: int) -> bytes:
