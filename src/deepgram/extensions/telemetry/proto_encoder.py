@@ -4,7 +4,12 @@ from __future__ import annotations
 import struct
 import time
 import typing
-from typing import Dict, List
+from typing import Final, Dict, List
+
+# Pre-allocate single-byte values for fast returns and remove unnecessary bytearray use for small varints
+
+# Cache single-byte varint results for small integers (most common case in proto3 encoding)
+_VARINT_SINGLE_BYTE_CACHE: Final = [bytes([i]) for i in range(0x80)]  # 0..127
 
 
 # --- Protobuf wire helpers (proto3) ---
@@ -13,20 +18,29 @@ def _varint(value: int) -> bytes:
     if value < 0:
         # For this usage we only encode non-negative values
         value &= (1 << 64) - 1
-    out = bytearray()
+    # Fast path: single byte representation for 0..127
+    if value < 0x80:
+        return _VARINT_SINGLE_BYTE_CACHE[value]
+    # Avoid new bytearray for multibyte case, use a local array
+    result = []
     while value > 0x7F:
-        out.append((value & 0x7F) | 0x80)
+        result.append((value & 0x7F) | 0x80)
         value >>= 7
-    out.append(value)
-    return bytes(out)
+    result.append(value)
+    return bytes(result)
 
 
 def _key(field_number: int, wire_type: int) -> bytes:
+    # field_number and wire_type are always non-negative and normally small, so varint fast path is common
     return _varint((field_number << 3) | wire_type)
 
 
 def _len_delimited(field_number: int, payload: bytes) -> bytes:
-    return _key(field_number, 2) + _varint(len(payload)) + payload
+    # Minimize temporaries: build parts and join at once (avoid string concatenation chain)
+    key = _key(field_number, 2)
+    length = _varint(len(payload))
+    # Use tuple join to avoid intermediate objects
+    return b''.join((key, length, payload))
 
 
 def _string(field_number: int, value: str) -> bytes:
