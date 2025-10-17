@@ -25,6 +25,8 @@ from ...extensions.types.sockets import (
     ListenV1UtteranceEndEvent,
 )
 
+_bytes_types = (bytes, bytearray)
+
 # Response union type (Listen only receives JSON events)
 V1SocketClientResponse = typing.Union[
     ListenV1ResultsEvent,
@@ -131,7 +133,7 @@ class V1SocketClient(EventEmitterMixin):
 
     def _is_binary_message(self, message: typing.Any) -> bool:
         """Determine if a message is binary data."""
-        return isinstance(message, (bytes, bytearray))
+        return isinstance(message, _bytes_types)
 
     def _handle_binary_message(self, message: bytes) -> typing.Any:
         """Handle a binary message (returns as-is)."""
