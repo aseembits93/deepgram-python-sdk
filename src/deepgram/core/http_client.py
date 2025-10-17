@@ -95,11 +95,8 @@ def remove_omit_from_dict(
 ) -> typing.Dict[str, typing.Any]:
     if omit is None:
         return original
-    new: typing.Dict[str, typing.Any] = {}
-    for key, value in original.items():
-        if value is not omit:
-            new[key] = value
-    return new
+    # Use dict comprehension for single-pass filtering
+    return {key: value for key, value in original.items() if value is not omit}
 
 
 def maybe_filter_request_body(
@@ -108,23 +105,22 @@ def maybe_filter_request_body(
     omit: typing.Optional[typing.Any],
 ) -> typing.Optional[typing.Any]:
     if data is None:
-        return (
-            jsonable_encoder(request_options.get("additional_body_parameters", {})) or {}
-            if request_options is not None
-            else None
-        )
+        if request_options is not None:
+            result = jsonable_encoder(request_options.get("additional_body_parameters", {}))
+            return result or {}
+        else:
+            return None
     elif not isinstance(data, typing.Mapping):
-        data_content = jsonable_encoder(data)
+        return jsonable_encoder(data)
     else:
-        data_content = {
-            **(jsonable_encoder(remove_omit_from_dict(data, omit))),  # type: ignore
-            **(
-                jsonable_encoder(request_options.get("additional_body_parameters", {})) or {}
-                if request_options is not None
-                else {}
-            ),
-        }
-    return data_content
+        dict_no_omit = remove_omit_from_dict(data, omit)
+        base_encoded = jsonable_encoder(dict_no_omit)
+        extra_encoded = {}
+        if request_options is not None:
+            extra = request_options.get("additional_body_parameters", {})
+            extra_encoded = jsonable_encoder(extra) or {}
+        # Combine the dicts using {**a, **b}, as in original
+        return {**base_encoded, **extra_encoded}
 
 
 # Abstracted out for testing purposes
