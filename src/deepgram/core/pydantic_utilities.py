@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import Any, Callable, ClassVar, Dict, List, Mapping, Optional, Set, Tuple, Type, TypeVar, Union, cast
 
 import pydantic
+from src.deepgram.core.serialization import convert_and_respect_annotation_metadata
 
 IS_PYDANTIC_V2 = pydantic.VERSION.startswith("2.")
 
@@ -73,8 +74,8 @@ class UniversalBaseModel(pydantic.BaseModel):
 
     @classmethod
     def model_construct(cls: Type["Model"], _fields_set: Optional[Set[str]] = None, **values: Any) -> "Model":
-        dealiased_object = convert_and_respect_annotation_metadata(object_=values, annotation=cls, direction="read")
-        return cls.construct(_fields_set, **dealiased_object)
+        # Optimization: model_construct calls construct, so only convert once.
+        return cls.construct(_fields_set, **values)
 
     @classmethod
     def construct(cls: Type["Model"], _fields_set: Optional[Set[str]] = None, **values: Any) -> "Model":
