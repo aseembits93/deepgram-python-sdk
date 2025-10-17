@@ -167,10 +167,11 @@ def extract_deepgram_headers(headers: Mapping[str, str] | None) -> Dict[str, str
     if not headers:
         return None
     
-    dg_headers = {}
-    for key, value in headers.items():
-        if key.lower().startswith('x-dg-'):
-            dg_headers[key.lower()] = str(value)
+    dg_headers = {
+        key_lower: str(value)
+        for key, value in headers.items()
+        if (key_lower := key.lower()).startswith('x-dg-')
+    }
     
     return dg_headers if dg_headers else None
 
