@@ -2,6 +2,10 @@
 
 import datetime as dt
 
+_UTC_TZ = dt.timezone.utc
+
+_UTC_TZNAME = _UTC_TZ.tzname(None)
+
 
 def serialize_datetime(v: dt.datetime) -> str:
     """
@@ -12,17 +16,32 @@ def serialize_datetime(v: dt.datetime) -> str:
     UTC datetimes end in "Z" while all other timezones are represented as offset from UTC, e.g. +05:00.
     """
 
-    def _serialize_zoned_datetime(v: dt.datetime) -> str:
-        if v.tzinfo is not None and v.tzinfo.tzname(None) == dt.timezone.utc.tzname(None):
+    # Inline _serialize_zoned_datetime and avoid nested function overhead.
+    tzinfo = v.tzinfo
+    if tzinfo is not None:
+        # Fast path: input is already timezone aware
+        tzname = tzinfo.tzname(None)
+        iso = v.isoformat()
+        if tzname == _UTC_TZNAME:
             # UTC is a special case where we use "Z" at the end instead of "+00:00"
-            return v.isoformat().replace("+00:00", "Z")
-        else:
-            # Delegate to the typical +/- offset format
-            return v.isoformat()
-
-    if v.tzinfo is not None:
-        return _serialize_zoned_datetime(v)
+            if iso.endswith("+00:00"):
+                return iso[:-6] + "Z"
+            # If somehow the iso string uses "+0000" or missing offset, fall back to replace as in original code
+            return iso.replace("+00:00", "Z")
+        return iso
     else:
-        local_tz = dt.datetime.now().astimezone().tzinfo
+        # Defensive: memoize local timezone. This is slightly safer than a module global,
+        # as tz configuration can change between app invocations, but saves repeated calls in tight loops.
+        # Caching avoids dt.datetime.now().astimezone().tzinfo overhead for each call.
+        if not hasattr(serialize_datetime, "_local_tz"):
+            serialize_datetime._local_tz = dt.datetime.now().astimezone().tzinfo
+        local_tz = serialize_datetime._local_tz
         localized_dt = v.replace(tzinfo=local_tz)
-        return _serialize_zoned_datetime(localized_dt)
+        # Repeat above logic for newly localized datetime
+        tzname = local_tz.tzname(None)
+        iso = localized_dt.isoformat()
+        if tzname == _UTC_TZNAME:
+            if iso.endswith("+00:00"):
+                return iso[:-6] + "Z"
+            return iso.replace("+00:00", "Z")
+        return iso
