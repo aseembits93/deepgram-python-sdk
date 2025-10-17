@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Mapping
+from urllib.parse import parse_qsl, urlparse
 
 from ..telemetry.handler import TelemetryHandler
 from .instrumented_http import HttpEvents
@@ -231,8 +232,6 @@ def capture_request_details(
 def _extract_url_structure(url: str) -> Dict[str, Any]:
     """Extract URL structure without exposing sensitive query parameter values."""
     try:
-        from urllib.parse import parse_qs, urlparse
-        
         parsed = urlparse(url)
         structure: Dict[str, Any] = {
             'scheme': parsed.scheme,
@@ -243,7 +242,7 @@ def _extract_url_structure(url: str) -> Dict[str, Any]:
         
         # For query string, only capture the parameter keys, not values
         if parsed.query:
-            query_params = parse_qs(parsed.query, keep_blank_values=True)
+            query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
             structure['query_param_keys'] = sorted(list(query_params.keys()))
             structure['query_param_count'] = len(query_params)
         
