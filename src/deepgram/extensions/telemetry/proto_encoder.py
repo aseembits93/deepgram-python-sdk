@@ -10,19 +10,33 @@ from typing import Dict, List
 # --- Protobuf wire helpers (proto3) ---
 
 def _varint(value: int) -> bytes:
-    if value < 0:
-        # For this usage we only encode non-negative values
+    # Fast-path for small positive values
+    if value >= 0:
+        if value < 0x80:
+            return bytes([value])
+    else:
         value &= (1 << 64) - 1
-    out = bytearray()
+    out = []
+    append = out.append
     while value > 0x7F:
-        out.append((value & 0x7F) | 0x80)
+        append((value & 0x7F) | 0x80)
         value >>= 7
-    out.append(value)
+    append(value)
     return bytes(out)
 
 
 def _key(field_number: int, wire_type: int) -> bytes:
-    return _varint((field_number << 3) | wire_type)
+    # inlined: key never negative, always less than 1<<29
+    key = (field_number << 3) | wire_type
+    if key < 0x80:
+        return bytes([key])
+    out = []
+    append = out.append
+    while key > 0x7F:
+        append((key & 0x7F) | 0x80)
+        key >>= 7
+    append(key)
+    return bytes(out)
 
 
 def _len_delimited(field_number: int, payload: bytes) -> bytes:
@@ -53,11 +67,15 @@ def _timestamp_message(ts_seconds: float) -> bytes:
     if nanos >= 1_000_000_000:
         sec += 1
         nanos -= 1_000_000_000
-    msg = bytearray()
-    msg += _int64(1, sec)
+    # Most typical usage: nanos == 0, so one field
+    key1 = _key(1, 0)
+    varint1 = _varint(sec)
     if nanos:
-        msg += _key(2, 0) + _varint(nanos)
-    return bytes(msg)
+        key2 = _key(2, 0)
+        varint2 = _varint(nanos)
+        return b"".join([key1, varint1, key2, varint2])
+    else:
+        return key1 + varint1
 
 
 # Map encoders: map<string,string> and map<string,double>
