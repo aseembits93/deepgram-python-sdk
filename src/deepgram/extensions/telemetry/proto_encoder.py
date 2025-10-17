@@ -13,7 +13,9 @@ def _varint(value: int) -> bytes:
     if value < 0:
         # For this usage we only encode non-negative values
         value &= (1 << 64) - 1
-    out = bytearray()
+    if value <= 0x7F:
+        return bytes((value,))
+    out = []
     while value > 0x7F:
         out.append((value & 0x7F) | 0x80)
         value >>= 7
