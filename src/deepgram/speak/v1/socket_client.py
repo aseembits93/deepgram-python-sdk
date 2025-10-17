@@ -9,6 +9,7 @@ import websockets
 import websockets.sync.connection as websockets_sync_connection
 from ...core.events import EventEmitterMixin, EventType
 from ...core.pydantic_utilities import parse_obj_as
+from websockets import WebSocketClientProtocol
 
 try:
     from websockets.legacy.client import WebSocketClientProtocol  # type: ignore
@@ -55,9 +56,8 @@ class AsyncV1SocketClient(EventEmitterMixin):
 
     def _process_message(self, raw_message: typing.Any) -> typing.Tuple[typing.Any, bool]:
         """Process a raw message, detecting if it's binary or JSON."""
-        if self._is_binary_message(raw_message):
-            processed = self._handle_binary_message(raw_message)
-            return processed, True
+        if isinstance(raw_message, (bytes, bytearray)):
+            return raw_message, True
         else:
             processed = self._handle_json_message(raw_message)
             return processed, False
