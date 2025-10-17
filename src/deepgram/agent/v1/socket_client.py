@@ -184,13 +184,16 @@ class AsyncV1SocketClient(EventEmitterMixin):
 
 
 class V1SocketClient(EventEmitterMixin):
+
     def __init__(self, *, websocket: websockets_sync_connection.Connection):
         super().__init__()
         self._websocket = websocket
 
     def _is_binary_message(self, message: typing.Any) -> bool:
         """Determine if a message is binary data."""
-        return isinstance(message, (bytes, bytearray))
+        # Use type-checking rather than isinstance for slight speed improvement with known types
+        msg_type = type(message)
+        return msg_type is bytes or msg_type is bytearray
 
     def _handle_binary_message(self, message: bytes) -> typing.Any:
         """Handle a binary message (returns as-is for audio chunks)."""
