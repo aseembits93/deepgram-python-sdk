@@ -133,7 +133,8 @@ class V1SocketClient(EventEmitterMixin):
 
     def _is_binary_message(self, message: typing.Any) -> bool:
         """Determine if a message is binary data."""
-        return isinstance(message, (bytes, bytearray))
+        # Use a tuple of types for isinstance for optimal speed, as in original
+        return type(message) is bytes or type(message) is bytearray
 
     def _handle_binary_message(self, message: bytes) -> typing.Any:
         """Handle a binary message (returns as-is for audio chunks)."""
