@@ -4,6 +4,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pydantic
 
+_BaseModel = pydantic.BaseModel
+
+_isBaseModel = _BaseModel.__instancecheck__
+
+_dict_type = dict
+
 
 # Flattens dicts to be of the form {"key[subkey][subkey2]": value} where value is not a dict
 def traverse_query_dict(dict_flat: Dict[str, Any], key_prefix: Optional[str] = None) -> List[Tuple[str, Any]]:
@@ -24,27 +30,31 @@ def traverse_query_dict(dict_flat: Dict[str, Any], key_prefix: Optional[str] = N
 
 
 def single_query_encoder(query_key: str, query_value: Any) -> List[Tuple[str, Any]]:
-    if isinstance(query_value, pydantic.BaseModel) or isinstance(query_value, dict):
-        if isinstance(query_value, pydantic.BaseModel):
-            obj_dict = query_value.dict(by_alias=True)
-        else:
-            obj_dict = query_value
+    # Reduce attribute and isinstance lookups by binding type/functions
+    BaseModel = _BaseModel
+    isBaseModel = _isBaseModel
+    dict_type = _dict_type
+
+    # Use type() instead of isinstance if types are performance-limiting in this code path,
+    # but here call isinstance only once where possible.
+    if isBaseModel(query_value) or isinstance(query_value, dict_type):
+        obj_dict = query_value.dict(by_alias=True) if isBaseModel(query_value) else query_value
         return traverse_query_dict(obj_dict, query_key)
     elif isinstance(query_value, list):
-        encoded_values: List[Tuple[str, Any]] = []
+        # Preallocate output list if possible by summing subelement lengths, but list sizes are not known in advance,
+        # so proceed with standard append/extend for minimal memory overhead
+        result: List[Tuple[str, Any]] = []
+        # Bind methods
+        result_append = result.append
+        result_extend = result.extend
         for value in query_value:
-            if isinstance(value, pydantic.BaseModel) or isinstance(value, dict):
-                if isinstance(value, pydantic.BaseModel):
-                    obj_dict = value.dict(by_alias=True)
-                elif isinstance(value, dict):
-                    obj_dict = value
-
-                encoded_values.extend(single_query_encoder(query_key, obj_dict))
+            if isBaseModel(value) or isinstance(value, dict_type):
+                obj_dict = value.dict(by_alias=True) if isBaseModel(value) else value
+                # Fast extend instead of creating an intermediate list
+                result_extend(single_query_encoder(query_key, obj_dict))
             else:
-                encoded_values.append((query_key, value))
-
-        return encoded_values
-
+                result_append((query_key, value))
+        return result
     return [(query_key, query_value)]
 
 
@@ -53,6 +63,8 @@ def encode_query(query: Optional[Dict[str, Any]]) -> Optional[List[Tuple[str, An
         return None
 
     encoded_query = []
+    # Bind for faster method access
+    encoded_query_extend = encoded_query.extend
     for k, v in query.items():
-        encoded_query.extend(single_query_encoder(k, v))
+        encoded_query_extend(single_query_encoder(k, v))
     return encoded_query
