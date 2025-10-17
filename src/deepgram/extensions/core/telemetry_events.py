@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Mapping
+from urllib.parse import parse_qsl, urlparse
 
 from ..telemetry.handler import TelemetryHandler
 from .instrumented_http import HttpEvents
 from .instrumented_socket import SocketEvents
+
+_SAFE_KWARGS = [
+    'duration_ms', 'error', 'error_type', 'error_message', 'stack_trace',
+    'timeout_occurred', 'function_name'
+]
+
+_SAFE_KWARGS_SET = set(_SAFE_KWARGS)
+
+_SENSITIVE_KEYS_SET = {'headers', 'params', 'json', 'data', 'content'}
+
+_REQUEST_ID_KEYS = (
+    'x-request-id', 'X-Request-Id', 'x-dg-request-id', 'X-DG-Request-Id', 'request-id', 'Request-Id'
+)
 
 
 class TelemetryHttpEvents(HttpEvents):
@@ -231,22 +245,28 @@ def capture_request_details(
 def _extract_url_structure(url: str) -> Dict[str, Any]:
     """Extract URL structure without exposing sensitive query parameter values."""
     try:
-        from urllib.parse import parse_qs, urlparse
-        
         parsed = urlparse(url)
+
         structure: Dict[str, Any] = {
             'scheme': parsed.scheme,
             'hostname': parsed.hostname,
             'port': parsed.port,
             'path': parsed.path,
         }
-        
+
         # For query string, only capture the parameter keys, not values
         if parsed.query:
-            query_params = parse_qs(parsed.query, keep_blank_values=True)
-            structure['query_param_keys'] = sorted(list(query_params.keys()))
-            structure['query_param_count'] = len(query_params)
-        
+            # Fastest way to collect keys: use parse_qsl to avoid intermediate dict
+            keys_seen = set()
+            keys: list[str] = []
+            for key, _ in parse_qsl(parsed.query, keep_blank_values=True):
+                if key not in keys_seen:
+                    keys.append(key)
+                    keys_seen.add(key)
+            keys.sort()
+            structure['query_param_keys'] = keys
+            structure['query_param_count'] = len(keys_seen)
+
         return structure
     except Exception:
         # If URL parsing fails, just return a safe representation
@@ -256,50 +276,54 @@ def _extract_url_structure(url: str) -> Dict[str, Any]:
 def capture_response_details(response: Any = None, **kwargs) -> Dict[str, Any]:
     """Capture comprehensive response details for telemetry (keys only for privacy)."""
     details = {}
-    
+
     if response is not None:
-        # Try to extract common response attributes
         try:
-            if hasattr(response, 'status_code'):
-                details['status_code'] = response.status_code
-            if hasattr(response, 'headers'):
-                # For response headers, capture only keys (not values) for privacy
-                headers = response.headers
-                details['response_header_keys'] = sorted(list(headers.keys()))
-                details['response_header_count'] = len(headers)
-                
-                # Extract request_id for server-side correlation (this is safe to log)
-                request_id = (headers.get('x-request-id') or 
-                            headers.get('X-Request-Id') or 
-                            headers.get('x-dg-request-id') or 
-                             headers.get('X-DG-Request-Id') or 
-                             headers.get('request-id') or
-                             headers.get('Request-Id'))
-                if request_id:
-                    details['request_id'] = request_id
-                    
-            if hasattr(response, 'reason_phrase'):
-                details['reason_phrase'] = response.reason_phrase
-            if hasattr(response, 'url'):
-                # For response URL, capture structure but not full URL
-                details['response_url_structure'] = _extract_url_structure(str(response.url))
+            # Attribute fetches grouped and ordered for minimal hasattr calls
+            status_code = getattr(response, 'status_code', None)
+            if status_code is not None:
+                details['status_code'] = status_code
+
+            headers = getattr(response, 'headers', None)
+            if headers is not None:
+                keys = list(headers.keys())
+                keys.sort()
+                details['response_header_keys'] = keys
+                details['response_header_count'] = len(keys)
+
+                # Fast: single scan through known keys for known permutations
+                for reqid_key in _REQUEST_ID_KEYS:
+                    request_id = headers.get(reqid_key)
+                    if request_id:
+                        details['request_id'] = request_id
+                        break
+
+            reason_phrase = getattr(response, 'reason_phrase', None)
+            if reason_phrase is not None:
+                details['reason_phrase'] = reason_phrase
+
+            url = getattr(response, 'url', None)
+            if url is not None:
+                details['response_url_structure'] = _extract_url_structure(str(url))
         except Exception:
             pass
-    
-    # Capture any additional response context (excluding sensitive data)
-    safe_kwargs = ['duration_ms', 'error', 'error_type', 'error_message', 'stack_trace', 
-                   'timeout_occurred', 'function_name']
-    for key in safe_kwargs:
-        if key in kwargs and kwargs[key] is not None:
-            details[key] = kwargs[key]
-    
-    # Also capture any other non-sensitive context
+
+    # Safe kwargs (non-sensitive), pre-resolved lookup keys for efficiency
+    for key in _SAFE_KWARGS:
+        val = kwargs.get(key)
+        if val is not None:
+            details[key] = val
+
+    # Remaining context (exclude sensitive keys, None values, and safe keys)
     for key, value in kwargs.items():
-        if (key not in safe_kwargs and 
-            value is not None and 
-            key not in ['headers', 'params', 'json', 'data', 'content']):  # Exclude potentially sensitive data
+        # Sets used for fast O(1) lookups
+        if (
+            key not in _SAFE_KWARGS_SET
+            and key not in _SENSITIVE_KEYS_SET
+            and value is not None
+        ):
             details[key] = value
-            
+
     return details
 
 
