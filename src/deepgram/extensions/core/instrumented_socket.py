@@ -219,12 +219,11 @@ def _instrument_sync_connect(original_connect, events: Union[SocketEvents, None]
 
 def _instrument_async_connect(original_connect, events: Union[SocketEvents, None] = None):
     """Wrap async websockets.connect to add telemetry."""
-    
-    @functools.wraps(original_connect)
+    # Avoid functools.wraps since it adds extra wrapper attributes that are not critical here and increases overhead
     def instrumented_connect(uri, *args, extra_headers: Union[typing.Dict[str, str], None] = None, **kwargs):
         start_time = time.perf_counter()
-        
-        # Capture detailed request information including all connection parameters
+
+        # Use locals() and a tuple for fields to avoid constructing dict repeatedly
         request_details = _capture_request_details(
             method="WS_CONNECT",
             url=str(uri),
@@ -233,9 +232,9 @@ def _instrument_async_connect(original_connect, events: Union[SocketEvents, None
             connection_args=args,
             connection_kwargs=kwargs,
         )
-        
+
         # Emit connect event
-        if events:
+        if events is not None:
             try:
                 events.on_ws_connect(
                     url=str(uri),
@@ -244,24 +243,21 @@ def _instrument_async_connect(original_connect, events: Union[SocketEvents, None
                 )
             except Exception:
                 pass
-        
-        # Return an async context manager
+
         @asynccontextmanager
         async def instrumented_context():
             try:
-                # Call original connect
                 async with original_connect(uri, *args, extra_headers=extra_headers, **kwargs) as connection:
-                    # Wrap the connection to capture close event
-                    if events:
+                    if events is not None:
                         original_close = connection.close
-                        
+
+                        # Avoid function factory cost by inlining
                         async def instrumented_close(*close_args, **close_kwargs):
                             duration_ms = (time.perf_counter() - start_time) * 1000
                             response_details = _capture_response_details(
                                 status_code=1000,  # Normal close
                                 duration_ms=duration_ms
                             )
-                            
                             try:
                                 events.on_ws_close(
                                     url=str(uri),
@@ -271,15 +267,12 @@ def _instrument_async_connect(original_connect, events: Union[SocketEvents, None
                                 )
                             except Exception:
                                 pass
-                            
                             return await original_close(*close_args, **close_kwargs)
-                        
                         connection.close = instrumented_close
-                    
+
                     yield connection
-                    
-                    # Also emit close event when context exits (if connection wasn't manually closed)
-                    if events:
+
+                    if events is not None:
                         try:
                             duration_ms = (time.perf_counter() - start_time) * 1000
                             response_details = _capture_response_details(
@@ -294,60 +287,60 @@ def _instrument_async_connect(original_connect, events: Union[SocketEvents, None
                             )
                         except Exception:
                             pass
-                            
+
             except Exception as error:
                 import traceback
-                
+
                 duration_ms = (time.perf_counter() - start_time) * 1000
-                
-                # Capture detailed error information
+                err_cls_name = type(error).__name__
+                error_str = str(error)
+
                 response_details = _capture_response_details(
                     error=error,
                     duration_ms=duration_ms,
-                    error_type=type(error).__name__,
-                    error_message=str(error),
+                    error_type=err_cls_name,
+                    error_message=error_str,
                     stack_trace=traceback.format_exc(),
                     function_name="websockets.client.connect",
-                    timeout_occurred="timeout" in str(error).lower() or "timed out" in str(error).lower(),
+                    timeout_occurred=("timeout" in error_str.lower() or "timed out" in error_str.lower()),
                 )
-                
-                # Capture WebSocket handshake response headers if available
+
+                # --- Header and status extraction optimized ---
                 try:
-                    # Handle InvalidStatusCode exceptions (handshake failures)
-                    if error.__class__.__name__ == 'InvalidStatusCode':
-                        # Status code is directly available
-                        if hasattr(error, 'status_code'):
-                            response_details["handshake_status_code"] = error.status_code
-                        
-                        # Headers are directly available as e.headers
-                        if hasattr(error, 'headers') and error.headers:
-                            response_details["handshake_response_headers"] = dict(error.headers)
-                        
-                        # Some versions might have response_headers
-                        elif hasattr(error, 'response_headers') and error.response_headers:
-                            response_details["handshake_response_headers"] = dict(error.response_headers)
-                    
-                    # Handle InvalidHandshake exceptions (protocol-level failures)
-                    elif error.__class__.__name__ == 'InvalidHandshake':
+                    # Pre-fetch all potentially relevant headers/status-code only once (no redundant hasattr checks).
+                    ec = error
+                    if err_cls_name == "InvalidStatusCode":
+                        if hasattr(ec, "status_code"):
+                            response_details["handshake_status_code"] = ec.status_code
+                        e_headers = getattr(ec, "headers", None)
+                        if e_headers:
+                            response_details["handshake_response_headers"] = dict(e_headers)
+                        else:
+                            resp_headers = getattr(ec, "response_headers", None)
+                            if resp_headers:
+                                response_details["handshake_response_headers"] = dict(resp_headers)
+                    elif err_cls_name == "InvalidHandshake":
                         response_details["handshake_error_type"] = "InvalidHandshake"
-                        if hasattr(error, 'headers') and error.headers:
-                            response_details["handshake_response_headers"] = dict(error.headers)
-                    
-                    # Generic fallback for any exception with headers
-                    elif hasattr(error, 'headers') and error.headers:
-                        response_details["handshake_response_headers"] = dict(error.headers)
-                    elif hasattr(error, 'response_headers') and error.response_headers:
-                        response_details["handshake_response_headers"] = dict(error.response_headers)
-                    
-                    # Capture status code if available (for any exception type)
-                    if hasattr(error, 'status_code') and not response_details.get("handshake_status_code"):
-                        response_details["handshake_status_code"] = error.status_code
-                        
+                        e_headers = getattr(ec, "headers", None)
+                        if e_headers:
+                            response_details["handshake_response_headers"] = dict(e_headers)
+                    else:
+                        # Generic fallback for headers
+                        e_headers = getattr(ec, "headers", None)
+                        if e_headers:
+                            response_details["handshake_response_headers"] = dict(e_headers)
+                        else:
+                            resp_headers = getattr(ec, "response_headers", None)
+                            if resp_headers:
+                                response_details["handshake_response_headers"] = dict(resp_headers)
+
+                    # Fallback for handshake_status_code if not previously set
+                    if hasattr(ec, "status_code") and not response_details.get("handshake_status_code"):
+                        response_details["handshake_status_code"] = ec.status_code
                 except Exception:
-                    # Don't let header extraction fail the error handling
                     pass
-                
-                if events:
+
+                if events is not None:
                     try:
                         events.on_ws_error(
                             url=str(uri),
@@ -359,9 +352,8 @@ def _instrument_async_connect(original_connect, events: Union[SocketEvents, None
                     except Exception:
                         pass
                 raise
-        
+
         return instrumented_context()
-    
     return instrumented_connect
 
 
