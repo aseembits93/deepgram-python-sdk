@@ -7,7 +7,8 @@ import pydantic
 
 # Flattens dicts to be of the form {"key[subkey][subkey2]": value} where value is not a dict
 def traverse_query_dict(dict_flat: Dict[str, Any], key_prefix: Optional[str] = None) -> List[Tuple[str, Any]]:
-    result = []
+    # Use local variable and local append for faster loop execution
+    result_append = (result := []).append
     for k, v in dict_flat.items():
         key = f"{key_prefix}[{k}]" if key_prefix is not None else k
         if isinstance(v, dict):
@@ -17,32 +18,29 @@ def traverse_query_dict(dict_flat: Dict[str, Any], key_prefix: Optional[str] = N
                 if isinstance(arr_v, dict):
                     result.extend(traverse_query_dict(arr_v, key))
                 else:
-                    result.append((key, arr_v))
+                    result_append((key, arr_v))
         else:
-            result.append((key, v))
+            result_append((key, v))
     return result
 
 
 def single_query_encoder(query_key: str, query_value: Any) -> List[Tuple[str, Any]]:
-    if isinstance(query_value, pydantic.BaseModel) or isinstance(query_value, dict):
-        if isinstance(query_value, pydantic.BaseModel):
-            obj_dict = query_value.dict(by_alias=True)
-        else:
-            obj_dict = query_value
+    # Avoid redundant isinstance checks and function calls
+    if isinstance(query_value, pydantic.BaseModel):
+        obj_dict = query_value.dict(by_alias=True)
         return traverse_query_dict(obj_dict, query_key)
+    elif isinstance(query_value, dict):
+        return traverse_query_dict(query_value, query_key)
     elif isinstance(query_value, list):
-        encoded_values: List[Tuple[str, Any]] = []
+        encoded_values_append = (encoded_values := []).append
         for value in query_value:
-            if isinstance(value, pydantic.BaseModel) or isinstance(value, dict):
-                if isinstance(value, pydantic.BaseModel):
-                    obj_dict = value.dict(by_alias=True)
-                elif isinstance(value, dict):
-                    obj_dict = value
-
+            if isinstance(value, pydantic.BaseModel):
+                obj_dict = value.dict(by_alias=True)
                 encoded_values.extend(single_query_encoder(query_key, obj_dict))
+            elif isinstance(value, dict):
+                encoded_values.extend(single_query_encoder(query_key, value))
             else:
-                encoded_values.append((query_key, value))
-
+                encoded_values_append((query_key, value))
         return encoded_values
 
     return [(query_key, query_value)]
