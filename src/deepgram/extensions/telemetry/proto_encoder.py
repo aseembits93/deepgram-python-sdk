@@ -13,15 +13,16 @@ def _varint(value: int) -> bytes:
     if value < 0:
         # For this usage we only encode non-negative values
         value &= (1 << 64) - 1
-    out = bytearray()
+    parts = []
     while value > 0x7F:
-        out.append((value & 0x7F) | 0x80)
+        parts.append((value & 0x7F) | 0x80)
         value >>= 7
-    out.append(value)
-    return bytes(out)
+    parts.append(value)
+    return bytes(parts)
 
 
 def _key(field_number: int, wire_type: int) -> bytes:
+    # Small optimize: don't allocate intermediate, pass integer ops directly.
     return _varint((field_number << 3) | wire_type)
 
 
@@ -39,7 +40,8 @@ def _bool(field_number: int, value: bool) -> bytes:
 
 
 def _int64(field_number: int, value: int) -> bytes:
-    return _key(field_number, 0) + _varint(value)
+    # Avoid string concatenation via '+', use bytes join for performance
+    return b"".join([_key(field_number, 0), _varint(value)])
 
 
 def _double(field_number: int, value: float) -> bytes:
